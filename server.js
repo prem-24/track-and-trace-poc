@@ -563,6 +563,37 @@ app.use((req, res) => {
   res.status(404).json({ success: false, message: `No route: ${req.method} ${req.url}` });
 });
 
+// ─── Agent movement simulation ────────────────────────────────────────────────
+// Moves ag_01 along a small loop toward FOC-2026-05-12-0042's destination so
+// the patient app map animates without needing the real agent app running.
+const SIM_WAYPOINTS = [
+  { lat: 12.9335, lng: 77.6215 },
+  { lat: 12.9320, lng: 77.6225 },
+  { lat: 12.9310, lng: 77.6240 },
+  { lat: 12.9295, lng: 77.6255 },
+  { lat: 12.9285, lng: 77.6265 },
+  { lat: 12.9279, lng: 77.6271 }, // destination
+  { lat: 12.9285, lng: 77.6265 },
+  { lat: 12.9295, lng: 77.6255 },
+  { lat: 12.9310, lng: 77.6240 },
+  { lat: 12.9320, lng: 77.6225 },
+];
+let simIndex = 0;
+
+function stepSimulation() {
+  // Only simulate when no real agent app is posting (location older than 20s)
+  const cached = locationCache['ag_01'];
+  const ageMs = cached ? Date.now() - new Date(cached.reported_at).getTime() : Infinity;
+  if (ageMs < 20000) return; // real agent is posting — don't override
+
+  const wp = SIM_WAYPOINTS[simIndex % SIM_WAYPOINTS.length];
+  locationCache['ag_01'] = { lat: wp.lat, lng: wp.lng, bearing: 120, accuracy: 10, reported_at: nowISO() };
+  simIndex++;
+  console.log(`[Sim] ag_01 → ${wp.lat.toFixed(4)}, ${wp.lng.toFixed(4)} (waypoint ${simIndex % SIM_WAYPOINTS.length})`);
+}
+
+setInterval(stepSimulation, 8000);
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 app.listen(PORT, '0.0.0.0', () => {
   console.log('');
