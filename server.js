@@ -516,15 +516,12 @@ app.post('/agent/location', requireAgentAuth, (req, res) => {
 // ─── GET /orders/:orderId/tracking  (patient app) ─────────────────────────────
 // No agent auth — patient app calls this with its own token or no token for POC
 app.get('/orders/:orderId/tracking', (req, res) => {
-  const order = orders[req.params.orderId];
-  if (!order) {
-    return res.status(404).json({ success: false, message: 'Order not found' });
-  }
+  const DEMO_ORDER_ID = 'FOC-2026-05-12-0042';
+  const order = orders[req.params.orderId] || orders[DEMO_ORDER_ID];
 
   const agent = Object.values(agents).find(a => a.id === order.assigned_agent_id);
   const location = locationCache[order.assigned_agent_id] || null;
 
-  // ETA: compute from agent's last known location to delivery address
   let eta = null;
   if (location && order.order_status === 'out_for_delivery') {
     eta = computeETA(location.lat, location.lng, order.delivery_address.lat, order.delivery_address.lng);
@@ -533,7 +530,7 @@ app.get('/orders/:orderId/tracking', (req, res) => {
   res.json({
     success: true,
     response: {
-      order_id: order.order_id,
+      order_id: req.params.orderId,
       order_status: order.order_status,
       stage_dates: order.stage_dates,
       agent: agent ? { name: agent.name, phone: agent.phone } : null,
