@@ -29,7 +29,9 @@ const agents = {
 };
 
 // Location cache: agent_id → { lat, lng, bearing, accuracy, reported_at }
-const locationCache = {};
+const locationCache = {
+  'ag_01': { lat: 12.9335, lng: 77.6215, bearing: 120, accuracy: 15, reported_at: new Date().toISOString() },
+};
 
 // Orders: order_id → order object (mutable — status transitions happen here)
 const orders = {
@@ -536,6 +538,7 @@ app.get('/orders/:orderId/tracking', (req, res) => {
       stage_dates: order.stage_dates,
       agent: agent ? { name: agent.name, phone: agent.phone } : null,
       agent_location: location,
+      destination: order.delivery_address ? { lat: order.delivery_address.lat, lng: order.delivery_address.lng } : null,
       eta,
       delivered_at: order.delivered_at ?? null,
       proof_photo_url: order.proof_photo_url ?? null,
