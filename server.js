@@ -319,58 +319,49 @@ function issueToken(agent) {
   );
 }
 
-// Haversine fallback — used when Google Directions call fails
-function haversine(lat1, lng1, lat2, lng2) {
+
+// ─── ETA ─────────────────────────────────────────────────────────────────────
+
+function haversineMinutes(lat1, lng1, lat2, lng2) {
   const R = 6371;
   const dLat = (lat2 - lat1) * (Math.PI / 180);
   const dLng = (lng2 - lng1) * (Math.PI / 180);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
-    Math.sin(dLng / 2) * Math.sin(dLng / 2);
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function haversineETA(agentLat, agentLng, destLat, destLng) {
-  const distKm = haversine(agentLat, agentLng, destLat, destLng);
-  const minutes = Math.max(1, Math.round((distKm / 20) * 60));
-  const arrivesAt = new Date(Date.now() + minutes * 60 * 1000);
-  return {
-    minutes,
-    arrives_at: arrivesAt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
-    computed_at: nowISO(),
-    source: 'haversine',
-  };
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  const distKm = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.max(1, Math.round((distKm / 20) * 60));
 }
 
 async function computeETA(agentLat, agentLng, destLat, destLng) {
-  if (!GOOGLE_MAPS_API_KEY) {
-    return haversineETA(agentLat, agentLng, destLat, destLng);
-  }
-
-  try {
-    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${agentLat},${agentLng}&destination=${destLat},${destLng}&mode=two_wheeler&key=${GOOGLE_MAPS_API_KEY}`;
-    const res = await fetch(url);
-    const data = await res.json();
-
-    if (data.status !== 'OK' || !data.routes?.[0]?.legs?.[0]) {
-      console.warn(`[ETA] Google Directions returned ${data.status} — falling back to Haversine`);
-      return haversineETA(agentLat, agentLng, destLat, destLng);
+  if (GOOGLE_MAPS_API_KEY) {
+    try {
+      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${agentLat},${agentLng}&destination=${destLat},${destLng}&mode=two_wheeler&key=${GOOGLE_MAPS_API_KEY}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.status === 'OK' && data.routes?.[0]?.legs?.[0]) {
+        const leg = data.routes[0].legs[0];
+        console.log(`✅ [ETA] distance: ${leg.distance.text} | duration: ${leg.duration.text} (${leg.duration.value}s)`);
+        const seconds = leg.duration.value;
+        const minutes = Math.max(1, Math.round(seconds / 60));
+        const arrivesAt = new Date(Date.now() + seconds * 1000);
+        return {
+          minutes,
+          arrives_at: arrivesAt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
+          computed_at: nowISO(),
+          source: 'google',
+        };
+      }
+      console.warn(`❌ [ETA] Google status: ${data.status}`);
+    } catch (err) {
+      console.warn(`💥 [ETA] Google failed: ${err.message}`);
     }
-
-    const durationSeconds = data.routes[0].legs[0].duration.value;
-    const minutes = Math.max(1, Math.round(durationSeconds / 60));
-    const arrivesAt = new Date(Date.now() + durationSeconds * 1000);
-    return {
-      minutes,
-      arrives_at: arrivesAt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
-      computed_at: nowISO(),
-      source: 'google',
-    };
-  } catch (err) {
-    console.warn(`[ETA] Google Directions failed (${err.message}) — falling back to Haversine`);
-    return haversineETA(agentLat, agentLng, destLat, destLng);
   }
+  const minutes = haversineMinutes(agentLat, agentLng, destLat, destLng);
+  return {
+    minutes,
+    arrives_at: new Date(Date.now() + minutes * 60 * 1000).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
+    computed_at: nowISO(),
+    source: 'haversine',
+  };
 }
 
 // ─── Auth middleware ──────────────────────────────────────────────────────────
