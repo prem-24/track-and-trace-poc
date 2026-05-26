@@ -7,6 +7,7 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'az-poc-secret-change-in-prod';
 const MOCK_OTP = process.env.MOCK_OTP || '111111';
+const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY || '';
 
 app.use(cors());
 app.use(express.json());
@@ -318,7 +319,7 @@ function issueToken(agent) {
   );
 }
 
-// Haversine distance in km
+// Haversine fallback — used when Google Directions call fails
 function haversine(lat1, lng1, lat2, lng2) {
   const R = 6371;
   const dLat = (lat2 - lat1) * (Math.PI / 180);
@@ -330,16 +331,46 @@ function haversine(lat1, lng1, lat2, lng2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function computeETA(agentLat, agentLng, destLat, destLng) {
+function haversineETA(agentLat, agentLng, destLat, destLng) {
   const distKm = haversine(agentLat, agentLng, destLat, destLng);
-  const avgSpeedKmh = 20;
-  const minutes = Math.max(1, Math.round((distKm / avgSpeedKmh) * 60));
+  const minutes = Math.max(1, Math.round((distKm / 20) * 60));
   const arrivesAt = new Date(Date.now() + minutes * 60 * 1000);
   return {
     minutes,
     arrives_at: arrivesAt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
     computed_at: nowISO(),
+    source: 'haversine',
   };
+}
+
+async function computeETA(agentLat, agentLng, destLat, destLng) {
+  if (!GOOGLE_MAPS_API_KEY) {
+    return haversineETA(agentLat, agentLng, destLat, destLng);
+  }
+
+  try {
+    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${agentLat},${agentLng}&destination=${destLat},${destLng}&mode=two_wheeler&key=${GOOGLE_MAPS_API_KEY}`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (data.status !== 'OK' || !data.routes?.[0]?.legs?.[0]) {
+      console.warn(`[ETA] Google Directions returned ${data.status} — falling back to Haversine`);
+      return haversineETA(agentLat, agentLng, destLat, destLng);
+    }
+
+    const durationSeconds = data.routes[0].legs[0].duration.value;
+    const minutes = Math.max(1, Math.round(durationSeconds / 60));
+    const arrivesAt = new Date(Date.now() + durationSeconds * 1000);
+    return {
+      minutes,
+      arrives_at: arrivesAt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
+      computed_at: nowISO(),
+      source: 'google',
+    };
+  } catch (err) {
+    console.warn(`[ETA] Google Directions failed (${err.message}) — falling back to Haversine`);
+    return haversineETA(agentLat, agentLng, destLat, destLng);
+  }
 }
 
 // ─── Auth middleware ──────────────────────────────────────────────────────────
@@ -515,7 +546,7 @@ app.post('/agent/location', requireAgentAuth, (req, res) => {
 
 // ─── GET /orders/:orderId/tracking  (patient app) ─────────────────────────────
 // No agent auth — patient app calls this with its own token or no token for POC
-app.get('/orders/:orderId/tracking', (req, res) => {
+app.get('/orders/:orderId/tracking', async (req, res) => {
   const DEMO_ORDER_ID = 'FOC-2026-05-12-0042';
   const order = orders[req.params.orderId] || orders[DEMO_ORDER_ID];
 
@@ -524,7 +555,7 @@ app.get('/orders/:orderId/tracking', (req, res) => {
 
   let eta = null;
   if (location && order.order_status === 'out_for_delivery') {
-    eta = computeETA(location.lat, location.lng, order.delivery_address.lat, order.delivery_address.lng);
+    eta = await computeETA(location.lat, location.lng, order.delivery_address.lat, order.delivery_address.lng);
   }
 
   res.json({
