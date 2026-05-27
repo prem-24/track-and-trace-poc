@@ -331,6 +331,15 @@ function haversineMinutes(lat1, lng1, lat2, lng2) {
   return Math.max(1, Math.round((distKm / 20) * 60));
 }
 
+// Random mock distance/ETA — always >= 5.0 km and >= 12 minutes
+function randomMockETA() {
+  const distKm = +(5.0 + Math.random() * 45).toFixed(1);   // 5.0 – 50.0 km
+  const minutes = Math.round(12 + Math.random() * 33);      // 12 – 45 min
+  const arrivesAt = new Date(Date.now() + minutes * 60 * 1000)
+    .toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+  return { distKm, eta: { minutes, arrives_at: arrivesAt, computed_at: nowISO(), source: 'mock' } };
+}
+
 async function computeETA(agentLat, agentLng, destLat, destLng) {
   if (GOOGLE_MAPS_API_KEY) {
     try {
@@ -538,31 +547,53 @@ app.post('/agent/location', requireAgentAuth, (req, res) => {
 // ─── GET /orders/:orderId/tracking  (patient app) ─────────────────────────────
 // No agent auth — patient app calls this with its own token or no token for POC
 app.get('/orders/:orderId/tracking', async (req, res) => {
-  const DEMO_ORDER_ID = 'FOC-2026-05-12-0042';
-  const order = orders[req.params.orderId] || orders[DEMO_ORDER_ID];
+  try {
+    const DEMO_ORDER_ID = 'FOC-2026-05-12-0042';
+    const order = orders[req.params.orderId] || orders[DEMO_ORDER_ID];
 
-  const agent = Object.values(agents).find(a => a.id === order.assigned_agent_id);
-  const location = locationCache[order.assigned_agent_id] || null;
+    const agent = Object.values(agents).find(a => a.id === order.assigned_agent_id);
+    const location = locationCache[order.assigned_agent_id] || null;
 
-  let eta = null;
-  if (location && order.order_status === 'out_for_delivery') {
-    eta = await computeETA(location.lat, location.lng, order.delivery_address.lat, order.delivery_address.lng);
+    let eta = null;
+    let distance_km = null;
+
+    if (order.order_status === 'out_for_delivery') {
+      if (location) {
+        eta = await computeETA(location.lat, location.lng, order.delivery_address.lat, order.delivery_address.lng);
+        // Clamp to minimum 12 minutes so demo never shows "almost arrived"
+        if (eta.minutes < 12) {
+          eta.minutes = Math.round(12 + Math.random() * 8);
+          eta.arrives_at = new Date(Date.now() + eta.minutes * 60 * 1000)
+            .toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+        }
+        distance_km = order.distance_km ?? null;
+      } else {
+        // No live location — generate random mock values (>= 5 km, >= 12 min)
+        const mock = randomMockETA();
+        eta = mock.eta;
+        distance_km = mock.distKm;
+      }
+    }
+
+    res.json({
+      success: true,
+      response: {
+        order_id: req.params.orderId,
+        order_status: order.order_status,
+        stage_dates: order.stage_dates,
+        agent: agent ? { name: agent.name, phone: agent.phone } : null,
+        agent_location: location,
+        destination: order.delivery_address ? { lat: order.delivery_address.lat, lng: order.delivery_address.lng } : null,
+        distance_km,
+        eta,
+        delivered_at: order.delivered_at ?? null,
+        proof_photo_url: order.proof_photo_url ?? null,
+      },
+    });
+  } catch (err) {
+    console.error('💥 [Tracking] Handler error:', err.message);
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
-
-  res.json({
-    success: true,
-    response: {
-      order_id: req.params.orderId,
-      order_status: order.order_status,
-      stage_dates: order.stage_dates,
-      agent: agent ? { name: agent.name, phone: agent.phone } : null,
-      agent_location: location,
-      destination: order.delivery_address ? { lat: order.delivery_address.lat, lng: order.delivery_address.lng } : null,
-      eta,
-      delivered_at: order.delivered_at ?? null,
-      proof_photo_url: order.proof_photo_url ?? null,
-    },
-  });
 });
 
 // ─── Health check ─────────────────────────────────────────────────────────────
